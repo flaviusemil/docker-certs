@@ -1,0 +1,100 @@
+---
+- name: Install mkcert on multiple platforms
+  hosts: all
+  vars_files:
+    - secrets.yaml
+
+  tasks:
+    - name: Download mkcert binary for Debian-based systems
+      get_url:
+        url: "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+        dest: /usr/local/bin/mkcert
+        mode: '0755'
+      become: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install mkcert on Arch Linux
+      pacman:
+        name: mkcert
+        state: present
+      become: yes
+      when: ansible_distribution == "Archlinux"
+
+    - name: Install Homebrew if not installed
+      command: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      args:
+        creates: /usr/local/bin/brew
+      become: yes
+      when: ansible_os_family == "Darwin"
+
+    - name: Install mkcert on macOS
+      homebrew:
+        name: mkcert
+        state: present
+      when: ansible_os_family == "Darwin"
+
+    - name: Install Chocolatey if not installed
+      win_command: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+      args:
+        creates: C:\ProgramData\chocolatey\bin\choco.exe
+      become: yes
+      when: ansible_os_family == "Windows"
+
+    - name: Install mkcert on Windows
+      win_chocolatey:
+        name: mkcert
+        state: present
+      become: yes
+      when: ansible_os_family == "Windows"
+
+    - name: Get mkcert CAROOT path
+      command: mkcert -CAROOT
+      environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+      register: caroot_output
+
+    - name: Print mkcert CAROOT path
+      debug:
+        msg: "CAROOT path is: {{ caroot_output.stdout }}"
+
+    - name: Create mkcert CAROOT directory if it does not exist
+      file:
+        path: "{{ caroot_output.stdout }}"
+        state: directory
+      when: caroot_output.stdout is defined
+
+    - name: Find files in mkcert CAROOT directory
+      find:
+        paths: "{{ caroot_output.stdout }}"
+        recurse: yes
+      register: caroot_files
+
+    - name: Print directory empty status
+      debug:
+        msg: "The directory {{ caroot_output.stdout }} is empty."
+      when: caroot_files.matched == 0
+
+    - name: Print directory not empty status
+      debug:
+        msg: "The directory {{ caroot_output.stdout }} is not empty."
+      when: caroot_files.matched > 0
+
+    - name: Copy the root certificate from Ansible Vault
+      copy:
+        content: "{{ ssl_root_cert }}"
+        dest: "{{ caroot_output.stdout }}/rootCA.pem"
+        mode: '0644'
+      when: caroot_files.matched == 0
+
+    - name: Copy the root key from Ansible Vault
+      copy:
+        content: "{{ ssl_root_key }}"
+        dest: "{{ caroot_output.stdout }}/rootCA-key.pem"
+        mode: '0600'
+      when: caroot_files.matched == 0
+
+    - name: Trust the local CA on the system
+      command: mkcert -install
+      environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"

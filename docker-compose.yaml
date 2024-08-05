@@ -1,0 +1,62 @@
+services:
+  traefik:
+    image: "traefik:v3.0"
+    container_name: "traefik"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/ping | grep OK" ]
+      start_period: 5s
+      start_interval: 1s
+    depends_on:
+      docker-certs:
+        condition: service_healthy
+    command:
+      - "--api.dashboard=true"
+      - "--ping=true"
+      - "--accesslog.format=json"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entryPoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.filename=/dynamic.yaml"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "./certs:/certs"
+      - "./certs/dynamic.yaml:/dynamic.yaml"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+  docker-certs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: "flaviusemil/docker-certs"
+    container_name: "docker-certs"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep docker-certs || exit 1"]
+      start_period: 1s
+      retries: 3
+      interval: 1s
+      timeout: 1s
+    volumes:
+      - "./certs:/app/certs"
+      - "~/.local/share/mkcert:/root/rootCerts:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+  whoami:
+    image: "traefik/whoami"
+    container_name: "simple-service"
+    depends_on:
+      traefik:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls=true"
