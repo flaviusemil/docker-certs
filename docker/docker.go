@@ -3,6 +3,9 @@ package docker
 import (
 	"context"
 	"crypto/x509"
+	"docker-certs/eventbus"
+	"docker-certs/targets"
+	"docker-certs/types"
 	"encoding/pem"
 	"fmt"
 	"github.com/docker/docker/api/types/events"
@@ -29,19 +32,17 @@ func ListenToDockerEvents() {
 	messages, errs := cli.Events(context.Background(), events.ListOptions{})
 	fmt.Println("Listening for Docker container events...")
 
+	bus := eventbus.GetEventBus()
+	bus.RegisterListener("start", targets.LogEvent)
+	bus.RegisterListener("stop", targets.LogEvent)
+
 	for {
 		select {
 		case msg := <-messages:
-			if msg.Type == "container" && msg.Action == "start" {
+			if msg.Type == "container" && (msg.Action == "start" || msg.Action == "stop") {
 				event := parseDockerEvent(msg)
-				fmt.Printf("Container Name: %s - Action: %s - Hosts: %v\n", event.ContainerID, event.Action, event.Hosts)
-				for _, host := range event.Hosts {
-					err := createCertificateIfNeeded(host)
-
-					if err != nil {
-						log.Printf("Error creating certificate for host %s: %v", host, err)
-					}
-				}
+				bus.Publish(event)
+				handleEvent(event)
 			}
 		case err := <-errs:
 			log.Fatalf("Error listening for events: %v", err)
@@ -51,25 +52,31 @@ func ListenToDockerEvents() {
 
 func createDynamicYAMLIfNotExists() error {
 	certDir := "certs"
+	filePath := certDir + "/dynamic.yaml"
 
-	if err := os.MkdirAll(certDir, os.ModePerm); err != nil {
-		return fmt.Errorf("error creating certs directory: %v", err)
-	}
-
-	file, err := os.Create("certs/dynamic.yaml")
-	if err != nil {
-		return fmt.Errorf("error creating file dynamic.yaml: %v", err)
-	}
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			log.Fatalf("There was an error trying to close the dynamic.yaml: %v", err)
+	if _, err := os.Stat(certDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(certDir, os.ModePerm); err != nil {
+			return fmt.Errorf("error creating certs directory: %v", err)
 		}
-	}(file)
+	}
+
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		log.Println("Creating dynamic YAML file...")
+		file, err := os.Create(filePath)
+		if err != nil {
+			return fmt.Errorf("error creating file dynamic.yaml: %v", err)
+		}
+		defer func(file *os.File) {
+			err := file.Close()
+			if err != nil {
+				log.Fatalf("There was an error trying to close the dynamic.yaml: %v", err)
+			}
+		}(file)
+	}
 	return nil
 }
 
-func parseDockerEvent(msg events.Message) Event {
+func parseDockerEvent(msg events.Message) types.Event {
 	actorMap := make(map[string]string)
 	for k, v := range msg.Actor.Attributes {
 		actorMap[k] = v
@@ -77,7 +84,7 @@ func parseDockerEvent(msg events.Message) Event {
 
 	hosts := extractHosts(actorMap)
 
-	return Event{
+	return types.Event{
 		ContainerID: msg.Actor.ID,
 		Action:      msg.Action,
 		Actor:       actorMap,
@@ -89,9 +96,12 @@ func extractHosts(actorMap map[string]string) []string {
 	var hosts []string
 	for key, value := range actorMap {
 		if strings.HasPrefix(key, "traefik.http.routers.") && strings.HasSuffix(key, ".rule") {
-			host := extractHost(value)
-			if host != "" && !strings.ContainsAny(host, "{}") {
-				hosts = append(hosts, host)
+			labeledHosts := strings.Split(value, "||")
+			for _, host := range labeledHosts {
+				host = extractHost(host)
+				if host != "" && !strings.ContainsAny(host, "{}") {
+					hosts = append(hosts, host)
+				}
 			}
 		}
 	}
@@ -106,6 +116,16 @@ func extractHost(rule string) string {
 		return rule[start+1 : end]
 	}
 	return ""
+}
+
+func handleEvent(event types.Event) {
+	for _, host := range event.Hosts {
+		err := createCertificateIfNeeded(host)
+
+		if err != nil {
+			log.Printf("Error creating certificate for host %s: %v", host, err)
+		}
+	}
 }
 
 func createCertificateIfNeeded(host string) error {
@@ -127,6 +147,27 @@ func createCertificateIfNeeded(host string) error {
 	}
 
 	return writeDynamicYAML(certFile, keyFile)
+}
+
+func registerService(host string) error {
+	if !strings.HasSuffix(host, ".local") {
+		return nil
+	}
+
+	index := strings.Index(host, ".")
+	instance := host[:index]
+	service := "_https._tcp"
+	domain := "local"
+	port := 443
+	txt := []string{"path=/"}
+
+	_, err := zeroconf.Register(instance, service, domain, port, txt, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//defer server.Shutdown() //TODO: Update this to shutdown the server when a service is stopped.
+	log.Printf("Advertised service %s.%s.%s on port %d\n", instance, service, domain, port)
+	return nil
 }
 
 func certExistsAndValid(certFile string) bool {
@@ -213,22 +254,5 @@ func writeDynamicYAML(certFile, keyFile string) error {
 		return fmt.Errorf("error writing YAML file: %v", err)
 	}
 	log.Println("YAML file created successfully")
-	return nil
-}
-
-func registerService(host string) error {
-	index := strings.Index(host, ".")
-	instance := host[:index]
-	service := "_http._tcp"
-	domain := "local."
-	port := 443
-	txt := []string{"path=/"}
-
-	server, err := zeroconf.Register(instance, service, domain, port, txt, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer server.Shutdown()
-	log.Printf("Advertised service %s.%s.%s on port %d\n", instance, service, domain, port)
 	return nil
 }
