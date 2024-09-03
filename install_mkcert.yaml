@@ -5,6 +5,20 @@
     - secrets.yaml
 
   tasks:
+    - name: Install NSS tool
+      block:
+        - name: Install NSS tool on Debian-based systems
+          apt:
+            name: libnss3-tools
+            state: present
+          when: ansible_facts['os_family'] == "Debian"
+
+        - name: Install NSS tool on Arch-based systems
+          pacman:
+            name: nss
+            state: present
+          when: ansible_facts['os_family'] == "Archlinux"
+
     - name: Download mkcert binary for Debian-based systems
       get_url:
         url: "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
