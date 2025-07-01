@@ -71,7 +71,7 @@
     - name: Get mkcert CAROOT path
       command: mkcert -CAROOT
       environment:
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin"
       register: caroot_output
 
     - name: Print mkcert CAROOT path
@@ -117,4 +117,4 @@
     - name: Trust the local CA on the system
       command: mkcert -install
       environment:
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+        PATH: "{{ ansible_env.PATH }}:/opt/homebrew/bin"
