@@ -1,14 +1,12 @@
 package module
 
 import (
-	"docker-certs/core/eventbus"
 	"log"
 )
 
 var loadedModules []Closable
 
 func LoadModules(modules []interface{}) {
-	bus := eventbus.Get()
 	for _, m := range modules {
 		if initable, ok := m.(Initializable); ok {
 			if err := initable.Init(); err != nil {
@@ -16,7 +14,7 @@ func LoadModules(modules []interface{}) {
 			}
 		}
 		if aware, ok := m.(EventAware); ok {
-			aware.RegisterListeners(bus)
+			aware.RegisterEventHandlers()
 		}
 		if closable, ok := m.(Closable); ok {
 			loadedModules = append(loadedModules, closable)

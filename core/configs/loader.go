@@ -8,10 +8,6 @@ import (
 	"strconv"
 )
 
-func BindEnvVarsWithDefaults(cfg interface{}) error {
-	return bindEnvVarsWithDefaults(cfg, "")
-}
-
 func bindEnvVarsWithDefaults(cfg interface{}, parentKey string) error {
 	val := reflect.ValueOf(cfg)
 	typ := reflect.TypeOf(cfg)

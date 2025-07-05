@@ -1,13 +1,11 @@
 package module
 
-import "docker-certs/core/eventbus"
-
 type Initializable interface {
 	Init() error
 }
 
 type EventAware interface {
-	RegisterListeners(bus *eventbus.EventBus)
+	RegisterEventHandlers()
 }
 
 type Closable interface {

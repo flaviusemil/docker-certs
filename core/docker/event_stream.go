@@ -2,45 +2,66 @@ package docker
 
 import (
 	"context"
+	"docker-certs/core/configs"
 	"docker-certs/core/eventbus"
 	"docker-certs/core/types"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"log"
+	"time"
 )
 
-func ListenToDockerEvents() {
+func ListenToDockerEvents(ctx context.Context) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("Error createing Docker client: %v", err)
+		log.Fatalf("Error creating Docker client: %v", err)
 	}
 
-	messages, errs := cli.Events(context.Background(), events.ListOptions{})
+	appConfig := configs.GetConfig()
+
+	f := filters.NewArgs()
+	f.Add("type", "container")
+	f.Add("event", "start")
+	f.Add("event", "stop")
+
 	log.Println("[docker] Listening for container events...")
 
 	for {
-		select {
-		case msg := <-messages:
-			if msg.Type == "container" && (msg.Action == "start" || msg.Action == "stop") {
-				log.Println("Docker event received", msg)
-
+		msgs, errs := cli.Events(ctx, events.ListOptions{Filters: f})
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case m, ok := <-msgs:
+				if !ok {
+					log.Println("[docker] event stream closed")
+					time.Sleep(time.Second)
+					goto reconnect
+				}
+				if appConfig.Debug {
+					log.Println("[docker] Docker event received", m)
+				}
 				msgType := types.ContainerStarted
 
-				if msg.Action == "stop" {
+				if m.Action == "stop" {
 					msgType = types.ContainerStopped
 				}
 
 				eventbus.Publish(types.Event[Event]{
 					Type: msgType,
 					Payload: Event{
-						ID:         msg.Actor.ID,
-						Action:     string(msg.Action),
-						Attributes: msg.Actor.Attributes,
+						ID:         m.Actor.ID,
+						Action:     string(m.Action),
+						Attributes: m.Actor.Attributes,
 					},
 				})
+			case err := <-errs:
+				log.Println("[docker] event stream error:", err)
+				time.Sleep(time.Second)
+				goto reconnect
 			}
-		case err := <-errs:
-			log.Fatalf("Error listening for events: %v", err)
 		}
+	reconnect:
 	}
 }

@@ -19,7 +19,7 @@ func (m *Module) Init() error {
 	return nil
 }
 
-func (m *Module) RegisterListeners(bus *eventbus.EventBus) {
+func (m *Module) RegisterEventHandlers() {
 	log.Println("[config-writer] Registering listeners...")
 
 	eventbus.On(types.CertCreated, updateTraefikConfig)

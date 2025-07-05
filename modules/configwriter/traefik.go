@@ -1,14 +1,18 @@
 package configwriter
 
 import (
-	"docker-certs/core/eventbus"
+	"docker-certs/core/configs"
 	"docker-certs/core/types"
 	"docker-certs/modules/certs"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log"
 	"os"
+	"path/filepath"
+	"sync"
 )
+
+var mu sync.Mutex
 
 type DynamicConfig struct {
 	TLS struct {
@@ -46,9 +50,21 @@ func createDynamicYAMLIfNotExists() error {
 }
 
 func writeDynamicYAML(certFile, keyFile string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	appConfig := configs.GetConfig()
+	filePath := filepath.Join(appConfig.CertsDir, "dynamic.yaml")
+
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		if err := createDynamicYAMLIfNotExists(); err != nil {
+			return err
+		}
+	}
+	
 	config := DynamicConfig{}
 
-	data, err := os.ReadFile("certs/dynamic.yaml")
+	data, err := os.ReadFile(filePath)
 
 	if err == nil {
 		err = yaml.Unmarshal(data, &config)
@@ -59,10 +75,20 @@ func writeDynamicYAML(certFile, keyFile string) error {
 		return fmt.Errorf("error reading existing YAML file: %v", err)
 	}
 
-	config.TLS.Certificates = append(config.TLS.Certificates, struct {
-		CertFile string `yaml:"certFile"`
-		KeyFile  string `yaml:"keyFile"`
-	}{CertFile: certFile, KeyFile: keyFile})
+	certAlreadyExists := false
+	for cert := range config.TLS.Certificates {
+		if config.TLS.Certificates[cert].CertFile == certFile {
+			certAlreadyExists = true
+			break
+		}
+	}
+
+	if !certAlreadyExists {
+		config.TLS.Certificates = append(config.TLS.Certificates, struct {
+			CertFile string `yaml:"certFile"`
+			KeyFile  string `yaml:"keyFile"`
+		}{CertFile: certFile, KeyFile: keyFile})
+	}
 
 	data, err = yaml.Marshal(&config)
 	if err != nil {
@@ -84,13 +110,4 @@ func updateTraefikConfig(e types.Event[certs.Event]) {
 	if err := writeDynamicYAML(e.Payload.CertFile, e.Payload.KeyFile); err != nil {
 		log.Println("[config-writer] Error writing dynamic YAML file:", err)
 	}
-
-	eventbus.Publish(types.Event[ConfigUpdatedEvent]{
-		Type: types.ConfigUpdated,
-		Payload: ConfigUpdatedEvent{
-			Host:     e.Payload.Host,
-			CertFile: e.Payload.CertFile,
-			KeyFile:  e.Payload.KeyFile,
-		},
-	})
 }

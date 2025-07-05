@@ -2,6 +2,7 @@ package certs
 
 import (
 	"crypto/x509"
+	"docker-certs/core/configs"
 	"docker-certs/core/docker"
 	"docker-certs/core/eventbus"
 	"docker-certs/core/types"
@@ -20,9 +21,9 @@ type Module struct {
 
 func (m *Module) Init() error { return nil }
 
-func (m *Module) RegisterListeners(bus *eventbus.EventBus) {
+func (m *Module) RegisterEventHandlers() {
 	eventbus.On(types.ContainerStarted, func(e types.Event[docker.Event]) {
-		hosts := extractHosts(e.Payload.Attributes)
+		hosts := ExtractHosts(e.Payload.Attributes)
 
 		for _, h := range hosts {
 			if err := createCertificateIfNeeded(h); err != nil {
@@ -32,7 +33,7 @@ func (m *Module) RegisterListeners(bus *eventbus.EventBus) {
 	})
 }
 
-func extractHosts(actorMap map[string]string) []string {
+func ExtractHosts(actorMap map[string]string) []string {
 	var hosts []string
 	for key, value := range actorMap {
 		if strings.HasPrefix(key, "traefik.http.routers.") && strings.HasSuffix(key, ".rule") {
@@ -59,7 +60,8 @@ func extractHost(rule string) string {
 }
 
 func createCertificateIfNeeded(host string) error {
-	certDir := "certs"
+	appConfig := configs.GetConfig()
+	certDir := appConfig.CertsDir
 	certFile := filepath.Join(certDir, host+".pem")
 	keyFile := filepath.Join(certDir, host+"-key.pem")
 
@@ -133,9 +135,21 @@ func getCARoot() string {
 
 func createCertificate(host, certFile, keyfile string) error {
 	log.Printf("[certs] Creating certificate for host %s", host)
+
+	appCfg := configs.GetConfig()
+
+	certDir := appCfg.CertsDir
+	if err := os.MkdirAll(certDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create certs directory: %v", err)
+	}
+
 	cmd := exec.Command("mkcert", "-cert-file", certFile, "-key-file", keyfile, host)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	if appCfg.Debug {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+
 	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("error creating certificate for host %s: %v", host, err)
