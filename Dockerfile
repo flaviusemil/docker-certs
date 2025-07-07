@@ -1,5 +1,7 @@
 FROM golang:latest AS builder
 
+ARG TARGETARCH
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -11,6 +13,8 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o docker-certs .
 
 FROM alpine:latest
+
+ARG TARGETARCH
 
 RUN apk update
 RUN apk --no-cache add ca-certificates curl \
